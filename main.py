@@ -1,12 +1,13 @@
 import os
 import requests
 import json
+import sys
+import time
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-import sys
 from pytubefix import YouTube
 from pytubefix.cli import on_progress
 # --- Configuration ---
@@ -21,6 +22,33 @@ CLIENT_SECRETS_FILE = 'credentials.json'
 
 # The name of the token file where your script will store user credentials after first authentication.
 TOKEN_FILE = 'token.json'
+PROCESSED_VIDEOS_FILE = 'processed_videos.json'
+
+
+def load_secrets():
+    """
+    Loads the secrets from the Secrets.json file.
+    This file should contain your API keys and other sensitive information.
+    """
+    try:
+        with open('secrets.json', 'r') as secrets_file:
+            return json.load(secrets_file)
+    except FileNotFoundError:
+        print("Secrets.json file not found. Please create it with your API keys.")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print("Error decoding Secrets.json. Please ensure it is a valid JSON file.")
+        sys.exit(1)
+
+secrets = load_secrets()
+YOUTUBE_API_KEY = secrets.get('API_KEY')
+
+CHANNELS_TO_WATCH = [
+    'UCxi42r9Q2RtW6Hq20FtQu6A',
+    'UCWFxT2oy0K9A5PiLdkCXAoQ'  # Example channel ID, replace with actual channel IDs you want to watch
+]
+
+CHECK_INTERVAL = 60 * 60  # Check every hour (in seconds)
 
 def authenticate_google_photos():
     """
@@ -131,6 +159,65 @@ def upload_video_to_google_photos(video_path):
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
 
+def build_youtube_service(api_key):
+    """
+    Builds and returns a YouTube service client using the YouTube Data API v3.
+    """
+    try:
+        return build('youtube', 'v3', developerKey=api_key)
+    except Exception as e:
+        print(f"Error building YouTube service: {e}")
+        return None
+
+def load_processed_videos():
+    """
+    Loads the list of processed videos from a JSON file.
+    If the file does not exist, it returns an empty list.
+    """
+    try:
+        if os.path.exists(PROCESSED_VIDEOS_FILE):
+            with open(PROCESSED_VIDEOS_FILE, 'r') as f:
+                return json.load(f)
+    except json.JSONDecodeError:
+        print(f"Error decoding JSON from {PROCESSED_VIDEOS_FILE}. Returning empty list.")
+    except Exception as e:
+        print(f"Error loading processed videos: {e}")
+    return []
+def get_latest_video_url(youtube_service, channel_id):
+    """
+    Fetches the latest video URL from a YouTube channel.
+
+    Args:
+        youtube_service: The YouTube service client.
+        channel_id (str): The ID of the YouTube channel.
+
+    Returns:
+        str: The URL of the latest video, or None if not found.
+    """
+    try:
+        
+        request = youtube_service.search().list(
+            part='snippet',
+            channelId=channel_id,
+            order='date',
+            maxResults=1,
+            type='video'
+        )
+        response = request.execute()
+        if response['items']:
+            video_id = response['items'][0]['id']['videoId']
+            if video_id not in load_processed_videos():
+                return {"Video Title": response['items'][0]['snippet']['title'], 
+                        "Video URL": f'https://www.youtube.com/watch?v={video_id}', 
+                        "Video ID": video_id}
+            print(f"Video {video_id} has already been processed.")
+        else:
+            print(f"No videos found for channel ID: {channel_id}")
+            return None
+    except Exception as e:
+        print(f"Error fetching latest video URL: {e}")
+        return None
+
 def download_youtube_video(url, file_name):
     """
     Downloads a YouTube video from the given URL and saves it with the given file name.
@@ -141,17 +228,59 @@ def download_youtube_video(url, file_name):
     stream = yt.streams.get_highest_resolution()
     stream.download(filename=file_name)
 # --- Main execution ---
-if __name__ == '__main__':
-    # Replace with the actual path to your video file
-    # Example: video_file_to_upload = "C:/Users/YourUser/Videos/my_awesome_video.mp4"
-    # Or for a relative path: video_file_to_upload = "my_video.mov"
-    url_to_download = sys.argv[1] # <--- IMPORTANT: CHANGE THIS LINE
+
+def download_and_upload_video(url_to_download):
+    print("downloading video from YouTube...")
     if not os.path.exists('./downloaded_video.mp4'):
         print("No existing video found. Downloading from YouTube...")
         print(f"downloading video from YouTube...\nURL: {url_to_download}")
         download_youtube_video(url_to_download, 'downloaded_video.mp4')
         print(f"Downloaded video to 'downloaded_video.mp4'")
-    # Check if the user has updated the placeholder path
-    print("Uploading video to Google Photos...")
-    upload_video_to_google_photos(video_path='downloaded_video.mp4')
-
+        # Check if the user has updated the placeholder path
+        print("Uploading video to Google Photos...")
+        upload_video_to_google_photos(video_path='downloaded_video.mp4')
+        os.remove('downloaded_video.mp4')  # Clean up the downloaded video file
+        print("Video upload completed and temporary file removed.")
+    else:
+        print("A video file already exists. Skipping download and upload.")
+        print("If you want to re-upload, please delete 'downloaded_video.mp4' first.")
+        sys.exit(0)
+if __name__ == '__main__':
+    # Replace with the actual path to your video file
+    # Example: video_file_to_upload = "C:/Users/YourUser/Videos/my_awesome_video.mp4"
+    # Or for a relative path: video_file_to_upload = "my_video.mov"
+    if len(sys.argv) > 2:
+        download_and_upload_video(sys.argv[1])
+    elif len(sys.argv) == 1:
+        print(f"No video URL provided. Watching {len(CHANNELS_TO_WATCH)} YouTube channels for new videos...")
+        youtube_service = build_youtube_service(YOUTUBE_API_KEY)
+        if not youtube_service:
+            print("Failed to build YouTube service. Exiting.")
+            sys.exit(1)
+        
+        while True:
+            for channel_id in CHANNELS_TO_WATCH:
+                video_info = get_latest_video_url(youtube_service, channel_id)
+                latest_video_url = video_info.get("Video URL")
+                latest_video_title = video_info.get("Video Title")
+                latest_video_id = video_info.get("Video ID")
+                if latest_video_url:
+                    print(f"Latest video title for channel {channel_id}: {latest_video_title}")
+                    print(f"Latest video URL for channel {channel_id}: {latest_video_url}")
+                    # Download and upload the video
+                    download_and_upload_video(latest_video_url)    
+                    #add video to processed list
+                    processed_videos = load_processed_videos()
+                    processed_videos.append(latest_video_id)  # Extract video ID from URL
+                    with open(PROCESSED_VIDEOS_FILE, 'w') as processed_file:
+                        json.dump(processed_videos, processed_file)
+                    print(f"Video {latest_video_id} has been processed and added to the list.") 
+                else:
+                    print(f"No new videos found for channel {channel_id}.") 
+            print(f"Waiting for {CHECK_INTERVAL // 60} minutes before checking again...")
+            # Wait for the specified interval before checking again
+            # This is to avoid hitting the YouTube API rate limits.
+            time.sleep(CHECK_INTERVAL) 
+    else:
+        print("Invalid number of arguments. Please provide a YouTube video URL to download and upload, or run without arguments to watch channels for new videos.")
+        sys.exit(1)
