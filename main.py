@@ -261,20 +261,23 @@ if __name__ == '__main__':
         while True:
             for channel_id in CHANNELS_TO_WATCH:
                 video_info = get_latest_video_url(youtube_service, channel_id)
-                latest_video_url = video_info.get("Video URL")
-                latest_video_title = video_info.get("Video Title")
-                latest_video_id = video_info.get("Video ID")
-                if latest_video_url:
-                    print(f"Latest video title for channel {channel_id}: {latest_video_title}")
-                    print(f"Latest video URL for channel {channel_id}: {latest_video_url}")
-                    # Download and upload the video
-                    download_and_upload_video(latest_video_url)    
-                    #add video to processed list
-                    processed_videos = load_processed_videos()
-                    processed_videos.append(latest_video_id)  # Extract video ID from URL
-                    with open(PROCESSED_VIDEOS_FILE, 'w') as processed_file:
-                        json.dump(processed_videos, processed_file)
-                    print(f"Video {latest_video_id} has been processed and added to the list.") 
+                if video_info is None:
+                    print(f"No new videos found for channel {channel_id}.")
+                elif 'Bilal' in video_info["Video Title"] or 'Zaid' in video_info["Video Title"]:
+                    latest_video_url = video_info["Video URL"]
+                    latest_video_title = video_info["Video Title"]
+                    latest_video_id = video_info["Video ID"]
+                    if latest_video_url:
+                        print(f"Latest video title for channel {channel_id}: {latest_video_title}")
+                        print(f"Latest video URL for channel {channel_id}: {latest_video_url}")
+                        # Download and upload the video
+                        download_and_upload_video(latest_video_url)    
+                        #add video to processed list
+                        processed_videos = load_processed_videos()
+                        processed_videos.append(latest_video_id)  # Extract video ID from URL
+                        with open(PROCESSED_VIDEOS_FILE, 'w') as processed_file:
+                            json.dump(processed_videos, processed_file)
+                        print(f"Video {latest_video_id} has been processed and added to the list.") 
                 else:
                     print(f"No new videos found for channel {channel_id}.") 
             print(f"Waiting for {CHECK_INTERVAL // 60} minutes before checking again...")
